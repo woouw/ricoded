@@ -1,0 +1,16 @@
+# Build artifacts
+ricoded
+ricoded-ng
+*.o
+
+# Editor
+*.swp
+*.swo
+*~
+
+# Debug/core dumps
+core
+core.*
+
+# Temporary files
+*.tmp
