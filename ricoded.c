@@ -30,6 +30,7 @@
 #include <unistd.h>
 
 #define POLL_NS 100000000L   /* cmus poll interval: 100 ms */
+#define NOTE_DISPLAY_DELAY 5.0 /* show notes after 5 seconds without a new line */
 
 typedef struct {
     double t;
@@ -557,10 +558,13 @@ int main(void)
     PlaybackClock clock = {0};
     Lyrics lyrics;
     char previous_file[sizeof cmus.file];
+    double lyric_start_position = 0.0;
     size_t cur_line = 0, cur_word = (size_t)-1;
     int mode = 1;
     int state = ST_NOTRACK;
     int redraw = 1;
+    int notes_visible = 0;
+    int lyric_position_valid = 0;
     int cols = 80, rows = 24;
     memset(&lyrics, 0, sizeof lyrics);
     previous_file[0] = '\0';
@@ -605,6 +609,8 @@ int main(void)
             if (plen < sizeof previous_file) {
                 memcpy(previous_file, cmus.file, plen + 1);
                 clock.valid = 0;
+                lyric_position_valid = 0;
+                notes_visible = 0;
                 if (engine_load(&lyrics) < 0 || lyrics.n == 0)
                     state = ST_NOLYRICS;
                 else
@@ -618,6 +624,7 @@ int main(void)
             double position = playback_position(&clock, &cmus);
             size_t nl = current_lyric(&lyrics, position);
             size_t nw = (size_t)-1;
+
             if (mode >= 2 && lyrics.v[nl].nw > 0)
                 nw = current_word(&lyrics.v[nl], position);
             if (nw != cur_word) {
@@ -628,6 +635,17 @@ int main(void)
             if (nl != cur_line) {
                 cur_line = nl;
                 redraw = 1;
+                lyric_start_position = position;
+                lyric_position_valid = 1;
+                notes_visible = 0;
+            }
+            if (lyrics.synced && lyric_position_valid) {
+                int show_notes = cmus.playing &&
+                    position - lyric_start_position >= NOTE_DISPLAY_DELAY;
+                if (show_notes != notes_visible) {
+                    notes_visible = show_notes;
+                    redraw = 1;
+                }
             }
         }
 
@@ -644,13 +662,29 @@ int main(void)
                 draw(&lyrics, 0, (size_t)-1, mode, "no embedded lyrics", cols, rows);
             } else {
                 double position = playback_position(&clock, &cmus);
-                if (lyrics.synced)
-                    cur_line = current_lyric(&lyrics, position);
+
+                if (lyrics.synced) {
+                    size_t nl = current_lyric(&lyrics, position);
+                    if (nl != cur_line || !lyric_position_valid) {
+                        cur_line = nl;
+                        lyric_start_position = position;
+                        lyric_position_valid = 1;
+                        notes_visible = 0;
+                    }
+                    if (lyric_position_valid)
+                        notes_visible = cmus.playing &&
+                            position - lyric_start_position >= NOTE_DISPLAY_DELAY;
+                } else {
+                    lyric_position_valid = 0;
+                    notes_visible = 0;
+                }
+
                 if (mode >= 2 && lyrics.v[cur_line].nw > 0)
                     cur_word = current_word(&lyrics.v[cur_line], position);
                 else
                     cur_word = (size_t)-1;
-                draw(&lyrics, cur_line, cur_word, mode, NULL, cols, rows);
+                draw(&lyrics, cur_line, cur_word, mode,
+                     notes_visible ? "♫" : NULL, cols, rows);
             }
             redraw = 0;
         }
