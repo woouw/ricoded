@@ -52,8 +52,17 @@ typedef struct {
 typedef struct {
     char   file[4096];
     double position;
+    int    playing;
     int    valid;
 } CmusState;
+
+typedef struct {
+    double raw_position;
+    double base_position;
+    struct timespec base_time;
+    int playing;
+    int valid;
+} PlaybackClock;
 
 static volatile sig_atomic_t running = 1, resized = 1;
 
@@ -290,6 +299,10 @@ static int cmus_query(CmusState *s)
             s->valid = 1;
         } else if (strncmp(line, "position ", 9) == 0) {
             s->position = strtod(line + 9, NULL);
+        } else if (strcmp(line, "status playing") == 0) {
+            s->playing = 1;
+        } else if (strncmp(line, "status ", 7) == 0) {
+            s->playing = 0;
         }
     }
     fclose(fp);
@@ -300,6 +313,40 @@ static int cmus_query(CmusState *s)
         return -1;
     }
     return s->valid ? 0 : -1;
+}
+
+static double timespec_elapsed(const struct timespec *start,
+                              const struct timespec *end)
+{
+    return (double)(end->tv_sec - start->tv_sec)
+         + (double)(end->tv_nsec - start->tv_nsec) / 1000000000.0;
+}
+
+/*
+ * cmus reports playback position in coarse units.  Keep a monotonic local
+ * clock between reports so word timestamps can be followed at sub-second
+ * precision.  Re-anchor when cmus advances its reported position or when
+ * playback changes between playing and paused/stopped.
+ */
+static double playback_position(PlaybackClock *c, const CmusState *s)
+{
+    struct timespec now;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0)
+        return s->position;
+
+    if (!c->valid || c->raw_position != s->position || c->playing != s->playing) {
+        c->raw_position = s->position;
+        c->base_position = s->position;
+        c->base_time = now;
+        c->playing = s->playing;
+        c->valid = 1;
+    }
+
+    if (!c->playing)
+        return c->raw_position;
+
+    return c->base_position + timespec_elapsed(&c->base_time, &now);
 }
 
 /* Run ricoded-ng once, parse its stdout, and reap it, checking status. */
@@ -507,6 +554,7 @@ enum { ST_OK, ST_NOTRACK, ST_NOLYRICS };
 int main(void)
 {
     CmusState cmus;
+    PlaybackClock clock = {0};
     Lyrics lyrics;
     char previous_file[sizeof cmus.file];
     size_t cur_line = 0, cur_word = (size_t)-1;
@@ -546,6 +594,7 @@ int main(void)
             break;
 
         if (cmus_query(&cmus) < 0) {
+            clock.valid = 0;
             if (state != ST_NOTRACK) {
                 state = ST_NOTRACK;
                 redraw = 1;
@@ -555,6 +604,7 @@ int main(void)
             size_t plen = strlen(cmus.file);
             if (plen < sizeof previous_file) {
                 memcpy(previous_file, cmus.file, plen + 1);
+                clock.valid = 0;
                 if (engine_load(&lyrics) < 0 || lyrics.n == 0)
                     state = ST_NOLYRICS;
                 else
@@ -564,11 +614,12 @@ int main(void)
             }
             redraw = 1;
         } else if (state == ST_OK) {
-            /* same song: just follow playback position */
-            size_t nl = current_lyric(&lyrics, cmus.position);
+            /* same song: follow a high-resolution local playback clock */
+            double position = playback_position(&clock, &cmus);
+            size_t nl = current_lyric(&lyrics, position);
             size_t nw = (size_t)-1;
             if (mode >= 2 && lyrics.v[nl].nw > 0)
-                nw = current_word(&lyrics.v[nl], cmus.position);
+                nw = current_word(&lyrics.v[nl], position);
             if (nw != cur_word) {
                 cur_word = nw;
                 if (mode >= 2)
@@ -592,10 +643,11 @@ int main(void)
             } else if (state == ST_NOLYRICS) {
                 draw(&lyrics, 0, (size_t)-1, mode, "no embedded lyrics", cols, rows);
             } else {
+                double position = playback_position(&clock, &cmus);
                 if (lyrics.synced)
-                    cur_line = current_lyric(&lyrics, cmus.position);
+                    cur_line = current_lyric(&lyrics, position);
                 if (mode >= 2 && lyrics.v[cur_line].nw > 0)
-                    cur_word = current_word(&lyrics.v[cur_line], cmus.position);
+                    cur_word = current_word(&lyrics.v[cur_line], position);
                 else
                     cur_word = (size_t)-1;
                 draw(&lyrics, cur_line, cur_word, mode, NULL, cols, rows);
