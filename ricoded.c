@@ -442,6 +442,22 @@ static size_t current_word(const Line *ln, double pos)
     return lo == 0 ? 0 : lo - 1;
 }
 
+/* Show the note glyph before the first lyric timestamp and during any
+ * five-second-or-longer gap after a timestamped line.  This is based on
+ * playback time itself, so the note remains stable while paused. */
+static int should_show_notes(const Lyrics *l, double pos)
+{
+    size_t line;
+
+    if (!l->synced || l->n == 0)
+        return 0;
+    if (pos < l->v[0].t)
+        return 1;
+
+    line = current_lyric(l, pos);
+    return pos - l->v[line].t >= NOTE_DISPLAY_DELAY;
+}
+
 /*
  * Locate word wi's text inside the line text by a sequential scan and
  * return its offset and bold length (trailing whitespace excluded from
@@ -558,13 +574,11 @@ int main(void)
     PlaybackClock clock = {0};
     Lyrics lyrics;
     char previous_file[sizeof cmus.file];
-    double lyric_start_position = 0.0;
     size_t cur_line = 0, cur_word = (size_t)-1;
     int mode = 1;
     int state = ST_NOTRACK;
     int redraw = 1;
     int notes_visible = 0;
-    int lyric_position_valid = 0;
     int cols = 80, rows = 24;
     memset(&lyrics, 0, sizeof lyrics);
     previous_file[0] = '\0';
@@ -609,7 +623,6 @@ int main(void)
             if (plen < sizeof previous_file) {
                 memcpy(previous_file, cmus.file, plen + 1);
                 clock.valid = 0;
-                lyric_position_valid = 0;
                 notes_visible = 0;
                 if (engine_load(&lyrics) < 0 || lyrics.n == 0)
                     state = ST_NOLYRICS;
@@ -635,13 +648,9 @@ int main(void)
             if (nl != cur_line) {
                 cur_line = nl;
                 redraw = 1;
-                lyric_start_position = position;
-                lyric_position_valid = 1;
-                notes_visible = 0;
             }
-            if (lyrics.synced && lyric_position_valid) {
-                int show_notes = cmus.playing &&
-                    position - lyric_start_position >= NOTE_DISPLAY_DELAY;
+            {
+                int show_notes = should_show_notes(&lyrics, position);
                 if (show_notes != notes_visible) {
                     notes_visible = show_notes;
                     redraw = 1;
@@ -664,18 +673,9 @@ int main(void)
                 double position = playback_position(&clock, &cmus);
 
                 if (lyrics.synced) {
-                    size_t nl = current_lyric(&lyrics, position);
-                    if (nl != cur_line || !lyric_position_valid) {
-                        cur_line = nl;
-                        lyric_start_position = position;
-                        lyric_position_valid = 1;
-                        notes_visible = 0;
-                    }
-                    if (lyric_position_valid)
-                        notes_visible = cmus.playing &&
-                            position - lyric_start_position >= NOTE_DISPLAY_DELAY;
+                    cur_line = current_lyric(&lyrics, position);
+                    notes_visible = should_show_notes(&lyrics, position);
                 } else {
-                    lyric_position_valid = 0;
                     notes_visible = 0;
                 }
 
