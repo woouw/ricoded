@@ -6,7 +6,7 @@
  *
  *   1  line mode        - the complete current line
  *   2  word mode        - the complete line, active word in bold
- *   3  current-word     - only the active word
+ *   3  current-word     - only the complete source word containing the active timing chunk
  *
  * Controls: 1, 2, 3 switch mode; q quits.
  *
@@ -30,7 +30,7 @@
 #include <unistd.h>
 
 #define POLL_NS 100000000L   /* cmus poll interval: 100 ms */
-#define NOTE_DISPLAY_DELAY 5.0 /* show notes after 5 seconds without a new line */
+#define NOTE_DISPLAY_DELAY 10.0 /* show notes after n seconds without a new line */
 
 typedef struct {
     double t;
@@ -493,6 +493,39 @@ static size_t word_offset(const Line *ln, size_t wi, size_t *bold_len)
     return 0;
 }
 
+/*
+ * Find the complete source word containing timing chunk wi.  W records
+ * may represent syllables or other smaller chunks rather than complete
+ * orthographic words.  The lyric line itself remains authoritative for
+ * word boundaries: after locating the W text, expand to the surrounding
+ * non-whitespace span.
+ */
+static size_t source_word_span(const Line *ln, size_t wi, size_t *word_len)
+{
+    size_t chunk_len;
+    size_t off = word_offset(ln, wi, &chunk_len);
+    const char *text;
+    size_t len;
+
+    if (chunk_len == 0) {
+        *word_len = 0;
+        return 0;
+    }
+
+    text = ln->text;
+    len = strlen(text);
+
+    while (off > 0 && !isspace((unsigned char)text[off - 1]))
+        off--;
+
+    size_t end = off;
+    while (end < len && !isspace((unsigned char)text[end]))
+        end++;
+
+    *word_len = end - off;
+    return off;
+}
+
 /* ------------------------------------------------------------------ */
 /* rendering                                                           */
 /* ------------------------------------------------------------------ */
@@ -530,16 +563,16 @@ static void draw(const Lyrics *L, size_t cur_line, size_t cur_word,
         }
     } else if (mode == 3 && cur_word != (size_t)-1) {
         const Line *ln = &L->v[cur_line];
-        const char *wt = ln->w[cur_word].text;
-        while (isspace((unsigned char)*wt))
-            wt++;
-        size_t wl = strlen(wt);
-        while (wl > 0 && isspace((unsigned char)wt[wl - 1]))
-            wl--;
-        int x = (cols - (int)wl) / 2;
-        if (x < 0)
-            x = 0;
-        printf("\033[%d;%dH%.*s", y, x + 1, (int)wl, wt);
+        size_t wl;
+        size_t off = source_word_span(ln, cur_word, &wl);
+        if (wl == 0) {
+            put_centered(y, ln->text, cols);
+        } else {
+            int x = (cols - (int)wl) / 2;
+            if (x < 0)
+                x = 0;
+            printf("\033[%d;%dH%.*s", y, x + 1, (int)wl, ln->text + off);
+        }
     } else if (mode == 2 && cur_word != (size_t)-1) {
         const Line *ln = &L->v[cur_line];
         size_t bl;
