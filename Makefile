@@ -15,11 +15,14 @@ ricoded: ricoded.c
 ricoded-ng: ricoded-ng.c
 	$(CC) $(CFLAGS) -o $@ ricoded-ng.c
 
+ricoded-halfblock: ricoded-halfblock.c
+	$(CC) $(CFLAGS) -o $@ ricoded-halfblock.c
+
 clean:
 	rm -f ricoded ricoded-ng
 
 install: all
 	install -d "$(DESTDIR)$(BINDIR)"
-	install -m 755 ricoded ricoded-ng "$(DESTDIR)$(BINDIR)"
+	install -m 755 ricoded ricoded-ng ricoded-halfblock "$(DESTDIR)$(BINDIR)"
 
 .PHONY: all clean install
